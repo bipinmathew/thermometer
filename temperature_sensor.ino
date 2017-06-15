@@ -4,6 +4,7 @@
  *  the most obvious difference being the different file you need to include:
  */
 #include <FS.h> 
+#include <PubSubClient.h>
 #include <ESP8266WiFi.h>          //ESP8266 Core WiFi Library (you most likely already have this in your sketch)
 
 #include <DNSServer.h>            //Local DNS Server used for redirecting all requests to the configuration portal
@@ -13,19 +14,28 @@
 
  
 
-char hub[80]      = "www.gothamrenters.com";              // website
-char label[80]    = "apartment";
+char hub[80]      = "bmathew-desktop";              // website
+const int hub_port = 1883;
+
+char label[80]    = "test";
 //flag for saving data
 bool shouldSaveConfig = false;
+WiFiClient client;
+
+char payload[1024];
+PubSubClient mqtt_client;
+byte mac[6];
+char mac_string[18];
 
 
 
-const unsigned long long_press_time = 50000; // is millis returning 0.1ms?
+const unsigned long long_press_time = 5000; // is millis returning 0.1ms?
 
 
 int sensorPin = A0; //the analog pin
 int inputPin = D2;
 float temperature;
+char temperature_string[6];
 
 bool long_press_flag=0;
 unsigned long press_time=0;
@@ -152,7 +162,15 @@ void setup() {
     configFile.close();
     //end save
   }
+
+  WiFi.macAddress(mac);
+  snprintf(mac_string,18,"%2x:%2x:%2x:%2x:%2x:%2x",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+  Serial.println("WiFi Mac Address: ");
+  Serial.println(mac_string);
+  Serial.println();
   
+  mqtt_client.setClient(client);
+  mqtt_client.setServer(hub,hub_port);
   
   temperature = 0.0;
   pinMode(inputPin,INPUT_PULLUP);
@@ -172,57 +190,51 @@ void loop() {
     ESP.restart();
     }
     else{
+      while(!mqtt_client.connected()){
+        if(mqtt_client.connect(mac_string)){
+          Serial.println("...connected");
+        }
+        else{
+          Serial.println("... no connect trying again");
+          delay(5000);
+        }
+      }
+      mqtt_client.loop();
+      
       int reading = analogRead(sensorPin); // current voltage off the sensor
       float voltage = 1000*reading * (3.3/1024);       // using 3.3v input
       temperature = (voltage - 500)/10;  //converting from 10 mv per degree with 500 mV offset
                                                  //to degrees C ((voltage - 500mV) times 100)
 
-      // this is the internet bit
-      broadcast(hub,label,temperature);
 
-      
       // Print SSID and RSSI for each network found
       Serial.print("Temperature: ");
       Serial.print(temperature);
       Serial.print(" (C)");
       Serial.println();
+
+      // this is the internet bit
+      dtostrf(temperature, 4, 2, temperature_string);
+
+      snprintf(payload,1024,"{\"temperature\": %s}",temperature_string);
+
+      
+      if(broadcast(&mqtt_client, hub,label,payload)){
+        Serial.print("Transmit failure :");
+        Serial.print(mqtt_client.state());
+        Serial.println();
+      }
+
+      
+
       delay(5000);
       
-      }
+  }
   
 }
 
 
-void broadcast( char* hub, char* label,float value) {
-
-  String url;
-  String PostData;
-
-  url = "/sensor/"+String(label);
-  PostData = String("{\"value\": ")+String(value)+String("}");
-  
- 
-  // Use WiFiClient class to create TCP connections
-  WiFiClient client;
- 
-  // port = 80 for web stuffs
-  const int httpPort = 80;
- 
-  // try out that connection plz
-  if (client.connect(hub, httpPort)) {
-    client.println("POST "+url+" HTTP/1.1");
-    client.println("Host: "+String(hub));
-    client.println("Content-Type: application/json");
-    client.println("User-Agent: Arduino/1.0");
-    client.println("Connection: close");
-    client.print("Content-Length: ");
-    client.println(PostData.length());
-    client.println();
-    client.println(PostData);
-  }
- 
-  // tiny delay            
-  delay(10);
-  
+bool broadcast( PubSubClient *mqtt_client, const char* hub, const char* label, const char* payload) {
+  return (mqtt_client->publish(label,payload) == false);
 }
 
