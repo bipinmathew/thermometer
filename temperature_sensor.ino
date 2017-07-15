@@ -1,3 +1,4 @@
+
 /*
  *  This sketch demonstrates how to scan WiFi networks. 
  *  The API is almost the same as with the WiFi Shield library, 
@@ -11,6 +12,7 @@
 #include <ESP8266WebServer.h>     //Local WebServer used to serve the configuration portal
 #include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager WiFi Configuration Magic
 #include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
+ADC_MODE(ADC_TOUT);
 
  
 
@@ -33,7 +35,11 @@ const unsigned long long_press_time = 5000; // is millis returning 0.1ms?
 
 
 int sensorPin = A0; //the analog pin
-int inputPin = D2;
+
+// Use GPIO pin 5. 
+// Note that on NodeMCU this should be D5.
+
+int inputPin = 5;
 float temperature;
 char temperature_string[6];
 
@@ -71,6 +77,12 @@ WiFiManagerParameter custom_hub("hub", "hub url", hub, 80);
 
 WiFiManagerParameter custom_label_text("<p>Sensor Label</p>");
 WiFiManagerParameter custom_label("label", "label", label, 80);
+
+
+
+bool broadcast( PubSubClient *mqtt_client, const char* label, const char* payload) {
+  return (mqtt_client->publish(label,payload) == false);
+}
 
 
 void setup() {
@@ -201,13 +213,19 @@ void loop() {
       }
       mqtt_client.loop();
       
-      int reading = analogRead(sensorPin); // current voltage off the sensor
-      float voltage = 1000*reading * (3.3/1024);       // using 3.3v input
-      temperature = (voltage - 500)/10;  //converting from 10 mv per degree with 500 mV offset
+      int reading = analogRead(sensorPin); // current voltage off the sensor this will be 0-2^10
+      float voltage = 3.3 *(((float)reading)/1024.0); // maximum of 3.3 v across tmp sensor. Maybe actually measure the rail voltage?
+      Serial.print("Reading: ");
+      Serial.print(reading);
+      Serial.print(" Voltage: ");
+      Serial.print(voltage);
+      Serial.println();
+      
+      temperature = (100*voltage) - 50;  //converting from 10 mv per degree with 500 mV offset
                                                  //to degrees C ((voltage - 500mV) times 100)
 
 
-      // Print SSID and RSSI for each network found
+
       Serial.print("Temperature: ");
       Serial.print(temperature);
       Serial.print(" (C)");
@@ -219,8 +237,8 @@ void loop() {
       snprintf(payload,1024,"{\"temperature\": %s}",temperature_string);
 
       
-      if(broadcast(&mqtt_client, hub,label,payload)){
-        Serial.print("Transmit failure :");
+      if(broadcast(&mqtt_client, label,payload)){
+        Serial.print("mqtt publish failure :");
         Serial.print(mqtt_client.state());
         Serial.println();
       }
@@ -233,8 +251,4 @@ void loop() {
   
 }
 
-
-bool broadcast( PubSubClient *mqtt_client, const char* hub, const char* label, const char* payload) {
-  return (mqtt_client->publish(label,payload) == false);
-}
 
