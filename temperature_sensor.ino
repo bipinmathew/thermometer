@@ -12,8 +12,12 @@
 #include <ESP8266WebServer.h>     //Local WebServer used to serve the configuration portal
 #include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager WiFi Configuration Magic
 #include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
-ADC_MODE(ADC_TOUT);
 
+#include "DHT.h"
+
+#define DHTPIN 4     // what digital pin the DHT22 is conected to
+#define DHTTYPE DHT22   // there are multiple kinds of DHT sensors
+DHT dht(DHTPIN, DHTTYPE);
  
 
 char hub[80]      = "bmathew-desktop";              // website
@@ -30,18 +34,16 @@ byte mac[6];
 char mac_string[18];
 
 
-
+int timeSinceLastRead = 0;
 const unsigned long long_press_time = 5000; // is millis returning 0.1ms?
-
-
-int sensorPin = A0; //the analog pin
 
 // Use GPIO pin 5. 
 // Note that on NodeMCU this should be D5.
 
-int inputPin = 5;
+static const int inputPin = 5;
 float temperature;
 char temperature_string[6];
+char humidity_string[6];
 
 bool long_press_flag=0;
 unsigned long press_time=0;
@@ -201,7 +203,8 @@ void loop() {
     WiFi.disconnect(true);
     ESP.restart();
     }
-    else{
+    else if(timeSinceLastRead>2000){
+      timeSinceLastRead=0;
       while(!mqtt_client.connected()){
         if(mqtt_client.connect(mac_string)){
           Serial.println("...connected");
@@ -212,29 +215,33 @@ void loop() {
         }
       }
       mqtt_client.loop();
+
+      float h = dht.readHumidity();
+      // Read temperature as Celsius (the default)
+      float t = dht.readTemperature();
       
-      int reading = analogRead(sensorPin); // current voltage off the sensor this will be 0-2^10
-      float voltage = 3.3 *(((float)reading)/1024.0); // maximum of 3.3 v across tmp sensor. Maybe actually measure the rail voltage?
-      Serial.print("Reading: ");
-      Serial.print(reading);
-      Serial.print(" Voltage: ");
-      Serial.print(voltage);
-      Serial.println();
-      
-      temperature = (100*voltage) - 50;  //converting from 10 mv per degree with 500 mV offset
-                                                 //to degrees C ((voltage - 500mV) times 100)
+
+      // Check if any reads failed and exit early (to try again).
+      if (isnan(h) || isnan(t)) {
+        Serial.println("Failed to read from DHT sensor!");
+        snprintf(payload,1024,"{\"status\": %d}",1);
+        return;
+      }
+      else{
+        Serial.print("Temperature: ");
+        Serial.print(t);
+        Serial.print(" (C)");
+        Serial.println();
+
+        // this is the internet bit
+        dtostrf(t, 4, 2, temperature_string);
+        dtostrf(h, 4, 2, humidity_string);
+
+        snprintf(payload,1024,"{\"status\": %d, \"temperature\": %s, \"humidity\": %s}",0,temperature_string,humidity_string);
+
+      }
 
 
-
-      Serial.print("Temperature: ");
-      Serial.print(temperature);
-      Serial.print(" (C)");
-      Serial.println();
-
-      // this is the internet bit
-      dtostrf(temperature, 4, 2, temperature_string);
-
-      snprintf(payload,1024,"{\"temperature\": %s}",temperature_string);
 
       
       if(broadcast(&mqtt_client, label,payload)){
@@ -244,11 +251,11 @@ void loop() {
       }
 
       
-
-      delay(5000);
-      
   }
-  
+  else{
+    delay(100);
+    timeSinceLastRead += 100;
+  }
 }
 
 
